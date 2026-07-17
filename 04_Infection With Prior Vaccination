@@ -1,0 +1,142 @@
+ 
+--================================================================================
+--Build_Infection_With_Prior_Vaccination.sql
+--Description: Build infection cohort stratified by prior vaccination status
+--             Compares GBS risk after infection in:
+--               - Vaccinated (infection occurred AFTER vaccination)
+--               - Unvaccinated (infection with NO prior vaccine dose)
+
+--Main Research Question:
+--  Does prior COVID-19 vaccination modify the risk of GBS following COVID-19 infection?
+--================================================================================
+ 
+
+-- -----------------------------------------------------------------------
+-- STEP 1: Infection_vaccine_first1y 
+-- Vaccinated-before-infection subcohort (365-day washout window)
+-- Source: Infection_vaccine_first1y (GBS_vaccine_infection1y)
+-- Identifies patients whose COVID infection occurred AFTER a prior vaccine dose
+-- vaccine must be within 365 days BEFORE infection
+-- -----------------------------------------------------------------------
+
+-- Patients infected after vaccination (vaccine 1–365 days before infection)
+-- vaccination_first_group = 1 when vaccine was 1–365 days prior to infection
+
+SELECT i.person_id,
+       v.drug_exposure_start_date,
+       i.first_infection_date,
+       DATEDIFF(v.drug_exposure_start_date, i.first_infection_date) AS days_between,
+  CASE
+    WHEN DATEDIFF(v.drug_exposure_start_date, i.first_infection_date) > -365
+     AND DATEDIFF(v.drug_exposure_start_date, i.first_infection_date) < 0 THEN 1
+    ELSE 0
+  END AS vaccination_first_group
+FROM all_infection_fact i
+LEFT JOIN Pre_covid_vaccine v
+  ON i.person_id = v.person_id
+WHERE (i.first_infection_date > '2020-12-11' OR i.first_infection_date = '2020-12-11')
+  AND (i.first_infection_date > v.drug_exposure_start_date OR v.person_id IS NULL);
+
+-- -----------------------------------------------------------------------
+-- STEP 2: Deduplicate vaccinated-before-infection cohort
+-- Retain one row per person; keep only those flagged infection_first_group = 1
+-- -----------------------------------------------------------------------
+
+
+SELECT DISTINCT person_id, first_infection_date
+FROM Infection_vaccine_first1y
+WHERE vaccination_first_group = 1;
+
+-- -----------------------------------------------------------------------
+-- STEP 3: Identify GBS cases in the vaccinated-before-infection cohort
+-- Links infection dates to GBS onset within the 30-day window
+-- Excludes patients with GBS in the 365-day pre-infection washout period
+-- -----------------------------------------------------------------------
+
+-- GBS onset flagging: infection_first_group = 1 when GBS occurs 0–30 days post-infection
+-- NOTE: GBS_within_30 is INVERTED (0 = within window, 1 = outside) — confirm intent
+SELECT
+  v.person_id,
+  v.first_infection_date,
+  i.condition_start_date,
+  DATEDIFF(i.condition_start_date, v.first_infection_date) AS days_between,
+  CASE
+    WHEN (DATEDIFF(i.condition_start_date, v.first_infection_date) <= 30
+      AND DATEDIFF(i.condition_start_date, v.first_infection_date) >= 0)
+      OR i.person_id IS NULL THEN 1
+    ELSE 0
+  END AS infection_first_group,
+  CASE
+    WHEN (DATEDIFF(i.condition_start_date, v.first_infection_date) < 30
+      AND DATEDIFF(i.condition_start_date, v.first_infection_date) > 0) THEN 0
+    ELSE 1
+  END AS GBS_within_30   --  0 = GBS IS within 30 days; 1 = outside window
+FROM GBS_ALL i
+LEFT JOIN Infection_vaccine_first1y_2 v
+  ON v.person_id = i.person_id
+WHERE (DATEDIFF(i.condition_start_date, v.first_infection_date) < 30
+   AND DATEDIFF(i.condition_start_date, v.first_infection_date) > 0
+   OR i.person_id IS NULL)
+  AND (v.first_infection_date > '2020-12-11' OR v.first_infection_date = '2020-12-11');
+
+-- -----------------------------------------------------------------------
+-- STEP 4: 365-day pre-infection GBS washout (vaccinated-before-infection)
+-- Excludes patients who had GBS in the year BEFORE their index infection
+-- -----------------------------------------------------------------------
+
+
+SELECT
+  v.person_id,
+  v.first_infection_date,
+  i.condition_start_date,
+  DATEDIFF(i.condition_start_date, v.first_infection_date) AS days_between,
+  CASE
+    WHEN (DATEDIFF(i.condition_start_date, v.first_infection_date) < 30
+      AND DATEDIFF(i.condition_start_date, v.first_infection_date) > 0)
+      OR i.person_id IS NULL THEN 1
+    ELSE 0
+  END AS infection_first_group,
+  CASE
+    WHEN (DATEDIFF(i.condition_start_date, v.first_infection_date) < 30
+      AND DATEDIFF(i.condition_start_date, v.first_infection_date) > 0) THEN 0
+    ELSE 1
+  END AS GBS_within_30
+FROM GBS_ALL i
+LEFT JOIN Infection_vaccine_first1y_2 v
+  ON v.person_id = i.person_id
+WHERE (DATEDIFF(i.condition_start_date, v.first_infection_date) > -365
+   AND DATEDIFF(i.condition_start_date, v.first_infection_date) < 0
+   OR i.person_id IS NULL)
+  AND (v.first_infection_date > '2020-12-11' OR v.first_infection_date = '2020-12-11');
+
+-- -----------------------------------------------------------------------
+-- STEP 5: Final GBS outcome — vaccinated-before-infection cohort
+-- Takes earliest GBS date per person; removes washout-period prevalent cases
+-- -----------------------------------------------------------------------
+
+
+SELECT
+    person_id,
+    MIN(condition_start_date) AS first_condition_start_date
+FROM GBS_vaccine_infection1y
+WHERE Vaccination_first_group = '1'
+  AND person_id NOT IN (SELECT person_id FROM GBS_vaccine_infection1y_365before)
+GROUP BY person_id;
+
+-- -----------------------------------------------------------------------
+-- STEP 6: Final outcome table — add has_GBS flag
+-- Joins cohort with confirmed GBS cases; produces binary has_GBS outcome
+-- -----------------------------------------------------------------------
+
+SELECT DISTINCT i.*,
+  CASE
+    WHEN g.person_id IS NOT NULL THEN 1
+    ELSE 0
+  END AS has_GBS,
+  CASE
+    WHEN g.first_condition_start_date IS NOT NULL THEN g.first_condition_start_date
+    ELSE NULL
+  END AS GBS_start_date
+FROM Infection_vaccine_first1y_2 i
+LEFT JOIN GBS_vaccine_infection1y1 g
+  ON g.person_id = i.person_id;

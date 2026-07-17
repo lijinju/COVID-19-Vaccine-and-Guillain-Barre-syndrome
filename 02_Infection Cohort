@@ -1,0 +1,122 @@
+-- ============================================================================
+-- GBS_IG_outcome.sql
+-- Description: GBS outcomes for patients in the Infection First group
+-- Identifies which infected patients developed GBS and when
+-- Excludes patients with GBS in the 365 days prior to infection
+-- ============================================================================
+-- Group: Infection first (group_id = 2)
+-- Index date: First infection date (first_infection_date)
+-- Risk window: 30 days post-infection
+-- ============================================================================
+
+-- ============================================================================
+-- STEP 1: Infection_first_group_2 (Filtered Cohort)
+-- Keep only patients confirmed as infection-first
+-- Deduplicate to one row per patient
+-- ============================================================================
+
+
+SELECT DISTINCT
+    person_id,
+    first_infection_date
+FROM Infection_first_group
+WHERE infection_first_group = 1;
+
+-- ============================================================================
+-- STEP 2: GBS_infection
+-- Find all GBS diagnoses within 30 days AFTER first infection
+-- Window: days_between in (0, 30) exclusive
+-- ============================================================================
+
+SELECT
+    v.person_id,
+    v.first_infection_date,
+    i.condition_start_date,
+    DATEDIFF(i.condition_start_date, v.first_infection_date) AS days_between,
+    CASE
+        WHEN ((DATEDIFF(i.condition_start_date, v.first_infection_date) < 30
+               AND DATEDIFF(i.condition_start_date, v.first_infection_date) > 0)
+              ) THEN 1
+        ELSE 0
+    END AS infection_first_group,
+    CASE
+        WHEN ((DATEDIFF(i.condition_start_date, v.first_infection_date) < 30
+               AND DATEDIFF(i.condition_start_date, v.first_infection_date) > 0)) THEN 0
+        ELSE 1
+    END AS GBS_within_30
+FROM GBS_ALL i
+LEFT JOIN Infection_first_group_2 v
+    ON v.person_id = i.person_id
+WHERE ((DATEDIFF(i.condition_start_date, v.first_infection_date) < 30
+        AND DATEDIFF(i.condition_start_date, v.first_infection_date) > 0)
+      AND (v.first_infection_date >= '2020-12-11');
+
+-- ============================================================================
+-- STEP 3: GBS_infection_365_before
+-- Prevalent GBS washout: GBS in the 365 days BEFORE first infection
+-- Window: days_between in (-365, 0) exclusive
+-- Persons here are excluded from STEP 5
+-- ============================================================================
+
+SELECT
+    v.person_id,
+    v.first_infection_date,
+    i.condition_start_date,
+    DATEDIFF(i.condition_start_date, v.first_infection_date) AS days_between,
+    CASE
+        WHEN ((DATEDIFF(i.condition_start_date, v.first_infection_date) < 30
+               AND DATEDIFF(i.condition_start_date, v.first_infection_date) > 0)
+              ) THEN 1
+        ELSE 0
+    END AS infection_first_group,
+    CASE
+        WHEN ((DATEDIFF(i.condition_start_date, v.first_infection_date) < 30
+               AND DATEDIFF(i.condition_start_date, v.first_infection_date) > 0)) THEN 0
+        ELSE 1
+    END AS GBS_within_30
+FROM GBS_ALL i
+LEFT JOIN Infection_first_group_2 v
+    ON v.person_id = i.person_id
+WHERE ((DATEDIFF(i.condition_start_date, v.first_infection_date) > -365
+        AND DATEDIFF(i.condition_start_date, v.first_infection_date) < 0)
+       )
+  AND (v.first_infection_date >= '2020-12-11');
+
+-- ============================================================================
+-- STEP 4: GBS_infection_group
+-- Earliest incident GBS date per person
+-- Excludes anyone with prevalent GBS (NOT IN STEP 4)
+-- ============================================================================
+
+SELECT
+    person_id,
+    MIN(condition_start_date) AS first_condition_start_date
+FROM GBS_infection
+WHERE infection_first_group = '1'
+    AND person_id NOT IN (
+        SELECT person_id FROM GBS_infection_365_before
+    )
+GROUP BY person_id;
+
+-- ============================================================================
+-- STEP 5: GBS_IG_outcome  
+-- Left join incident GBS onto full infection cohort
+-- Every person in Infection_first_group_2 gets one row
+-- has_GBS = 1 if incident GBS within window, else 0
+-- GBS_start_date = first qualifying GBS date, else NULL
+-- ============================================================================
+
+SELECT DISTINCT
+    i.*,
+    CASE
+        WHEN g.person_id IS NOT NULL THEN 1
+        ELSE 0
+    END AS has_GBS,
+    CASE
+        WHEN g.first_condition_start_date IS NOT NULL
+            THEN g.first_condition_start_date
+        ELSE NULL
+    END AS GBS_start_date
+FROM Infection_first_group_2 i
+LEFT JOIN GBS_infection_group g
+    ON g.person_id = i.person_id;

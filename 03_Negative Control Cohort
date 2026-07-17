@@ -1,0 +1,119 @@
+-- ============================================================================
+-- Negative control cohort -- well_care_visits-- GBS_NG_outcome.sql
+-- Description: Wellness visit cohort with NO vaccine AND NO infection
+--              within 30 days of the exam visit
+-- ============================================================================
+-- Purpose: Create control cohort of patients with routine wellness exams
+--          who had no vaccine or infection within 30 days after visit
+-- Index date: First wellness visit (first_visit)
+-- Risk window: 30 days post-visit
+-- ============================================================================
+-- Input: unique_exam_wo_both (clean control cohort from previous step)
+-- ============================================================================
+
+-- ============================================================================
+-- STEP 1: GBS_NG_all
+-- Find all GBS diagnoses within 30 days AFTER first wellness visit
+-- Window: days_between in (0, 30) exclusive
+-- ============================================================================
+
+
+SELECT
+    v.person_id,
+    v.first_visit,
+    i.condition_start_date,
+    DATEDIFF(i.condition_start_date, v.first_visit) AS days_between,
+    CASE
+        WHEN ((DATEDIFF(i.condition_start_date, v.first_visit) < 30
+               AND DATEDIFF(i.condition_start_date, v.first_visit) > 0)
+              OR i.person_id IS NULL) THEN 1
+        ELSE 0
+    END AS visit_first_group,
+    CASE
+        WHEN (DATEDIFF(i.condition_start_date, v.first_visit) > 0
+              AND DATEDIFF(i.condition_start_date, v.first_visit) < 30) THEN 1
+        ELSE 0
+    END AS GBS_within_30
+FROM GBS_ALL i
+LEFT JOIN unique_exam_wo_both v
+    ON v.person_id = i.person_id
+WHERE ((DATEDIFF(i.condition_start_date, v.first_visit) < 30
+        AND DATEDIFF(i.condition_start_date, v.first_visit) > 0)
+       OR i.person_id IS NULL)
+  AND (v.first_visit >= '2020-12-11');
+
+
+-- ============================================================================
+-- STEP 2: GBS_NG_before365
+-- Prevalent GBS washout: GBS in the 365 days BEFORE wellness visit
+-- Window: days_between in (-365, 0) exclusive
+-- Persons here are excluded from STEP 5
+-- ============================================================================
+
+
+SELECT
+    v.person_id,
+    v.first_visit,
+    i.condition_start_date,
+    DATEDIFF(i.condition_start_date, v.first_visit) AS days_between,
+    CASE
+        WHEN ((DATEDIFF(i.condition_start_date, v.first_visit) < 30
+               AND DATEDIFF(i.condition_start_date, v.first_visit) > 0)
+              OR i.person_id IS NULL) THEN 1
+        ELSE 0
+    END AS visit_first_group,
+    CASE
+        WHEN (DATEDIFF(i.condition_start_date, v.first_visit) > 0
+              AND DATEDIFF(i.condition_start_date, v.first_visit) < 30) THEN 1
+        ELSE 0
+    END AS GBS_within_30
+FROM GBS_ALL i
+LEFT JOIN unique_exam_wo_both v
+    ON v.person_id = i.person_id
+WHERE ((DATEDIFF(i.condition_start_date, v.first_visit) > -365
+        AND DATEDIFF(i.condition_start_date, v.first_visit) < 0)
+       OR i.person_id IS NULL)
+  AND (v.first_visit >= '2020-12-11');
+
+
+-- ============================================================================
+-- STEP 3: GBS_NG_group
+-- Earliest incident GBS date per person
+-- Excludes anyone with prevalent GBS (NOT IN STEP 4)
+-- ============================================================================
+
+
+SELECT
+    person_id,
+    MIN(condition_start_date) AS first_condition_start_date
+FROM GBS_NG_all
+WHERE GBS_within_30 = 1
+    AND person_id NOT IN (
+        SELECT person_id FROM GBS_NG_before365
+    )
+GROUP BY person_id;
+
+
+-- ============================================================================
+-- STEP 4: GBS_NG_outcome  
+-- Left join incident GBS onto full control cohort
+-- Every person in unique_exam_wo_both gets one row
+-- has_GBS = 1 if incident GBS within window, else 0
+-- GBS_start_date = first qualifying GBS date, else NULL
+-- ============================================================================
+
+
+SELECT DISTINCT
+    i.*,
+    CASE
+        WHEN g.person_id IS NOT NULL THEN 1
+        ELSE 0
+    END AS has_GBS,
+    CASE
+        WHEN g.first_condition_start_date IS NOT NULL
+            THEN g.first_condition_start_date
+        ELSE NULL
+    END AS GBS_start_date
+FROM unique_exam_wo_both i
+LEFT JOIN GBS_NG_group g
+    ON g.person_id = i.person_id;
