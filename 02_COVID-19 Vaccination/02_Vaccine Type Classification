@@ -1,0 +1,58 @@
+/*
+================================================================================
+File: Classify_Vaccine_Types.sql
+Description: Add vaccine type classification (Pfizer, Moderna, J&J, Unknown)
+==============================================================================
+*/
+
+
+-- Add vaccine type classification to the vaccination fact table
+SELECT *
+FROM (
+    SELECT *,
+        -- Keep first record per person (prioritize non-Unknown vaccine types)
+        ROW_NUMBER() OVER (PARTITION BY person_id ORDER BY CASE WHEN vac_type = 'Unknown' THEN 2 ELSE 1 END) AS row_num
+    FROM (
+        SELECT DISTINCT 
+            a.person_id, 
+            a.first_shot, 
+            a.second_shot, 
+            a.third_shot,
+            a.fourth_shot,
+            a.fifth_shot,
+            a.total_shots,
+            a.first_second_less_than_30,
+            a.first_third_less_than_30,
+            b.drug_concept_name, 
+            b.drug_concept_id,
+            
+            -- Classify vaccine type based on concept name
+            CASE 
+                WHEN UPPER(b.drug_concept_name) LIKE '%BNT162B2%' THEN 'Pfizer'
+                WHEN UPPER(b.drug_concept_name) LIKE '%1273%' THEN 'Moderna'
+                WHEN UPPER(b.drug_concept_name) LIKE '%AD26%' THEN 'J&J'
+                WHEN UPPER(b.drug_concept_name) LIKE '%JANSSEN%' THEN 'J&J'
+                WHEN UPPER(b.drug_concept_name) LIKE '%VECTOR%' THEN 'J&J'
+                WHEN UPPER(b.drug_concept_name) LIKE '%PFIZER%' THEN 'Pfizer'
+                WHEN UPPER(b.drug_concept_name) LIKE '%MODERNA%' THEN 'Moderna'
+                ELSE 'Unknown' 
+            END AS vac_type,
+            
+            -- Simplified vaccine platform classification
+            CASE 
+                WHEN UPPER(b.drug_concept_name) LIKE '%BNT162B2%' THEN 'mRNA'
+                WHEN UPPER(b.drug_concept_name) LIKE '%1273%' THEN 'mRNA'
+                WHEN UPPER(b.drug_concept_name) LIKE '%PFIZER%' THEN 'mRNA'
+                WHEN UPPER(b.drug_concept_name) LIKE '%MODERNA%' THEN 'mRNA'
+                WHEN UPPER(b.drug_concept_name) LIKE '%AD26%' THEN 'Viral Vector'
+                WHEN UPPER(b.drug_concept_name) LIKE '%JANSSEN%' THEN 'Viral Vector'
+                WHEN UPPER(b.drug_concept_name) LIKE '%VECTOR%' THEN 'Viral Vector'
+                ELSE 'Other'
+            END AS vaccine_platform
+            
+        FROM all_vaccine_fact a
+        JOIN Pre_covid_vaccine_all_record b ON a.person_id = b.person_id
+        WHERE a.first_shot = b.drug_exposure_start_date  -- Match first shot date
+    ) subquery
+) AS ranked_subquery
+WHERE row_num = 1;  -- Keep only the best match per person
