@@ -1,11 +1,11 @@
 /*
 ================================================================================
 File: Extract_Well_Visits.sql
-Description: to extract well-check visit
+Description: Extract well-check visit
 ================================================================================
 */
 
--- Extract well-check visit
+
 
 SELECT 
     person_id,
