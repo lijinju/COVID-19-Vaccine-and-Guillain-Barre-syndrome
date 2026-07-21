@@ -36,4 +36,4 @@ The study period spans from **1 year prior to the index date** through **90 days
 - **Competing Risks:** Survival time is censored at the date of death if the patient dies before developing GBS.
 - **Surveillance Bias Adjustment:** Baseline healthcare utilization (outpatient, ER, and inpatient visit counts) is calculated and adjusted for.
 
-This study utilized Limited Data from the N3C dataset with Structured Query Language (SQL), python 3.9 and R programming languages (version 4.2.2). 
+#### This study utilized Limited Data from the N3C dataset with Structured Query Language (SQL), python 3.9 and R programming languages (version 4.2.2). 
